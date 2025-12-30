@@ -74,21 +74,74 @@ func (c *QuarkChecker) Check(link string) (*CheckResult, error) {
 		}, nil
 	}
 
+	// 检查是否获取到stoken
+	if response.Data.Stoken == "" {
+		return &CheckResult{
+			Valid:         false,
+			FailureReason: "分享链接无效：未获取到访问令牌",
+			Duration:      duration,
+		}, nil
+	}
+
+	// 使用stoken进一步验证链接有效性
+	detailResponse, err := quarkDetailRequest(ctx, resourceID, response.Data.Stoken)
+	if err != nil {
+		if apphttp.IsTimeoutError(err) {
+			return &CheckResult{
+				Valid:         false,
+				FailureReason: "详情验证请求超时",
+				Duration:      time.Since(start).Milliseconds(),
+			}, nil
+		}
+		return &CheckResult{
+			Valid:         false,
+			FailureReason: "详情验证失败: " + err.Error(),
+			Duration:      time.Since(start).Milliseconds(),
+		}, nil
+	}
+
+	// 检查文件列表是否为空
+	if len(detailResponse.Data.List) == 0 {
+		return &CheckResult{
+			Valid:         false,
+			FailureReason: "分享链接无效：文件列表为空",
+			Duration:      time.Since(start).Milliseconds(),
+		}, nil
+	}
+
 	return &CheckResult{
 		Valid:         true,
 		FailureReason: "",
-		Duration:      duration,
+		Duration:      time.Since(start).Milliseconds(),
 	}, nil
 }
 
-// quarkResp 夸克API响应结构
+// quarkResp 夸克API响应结构（第一个API：获取token）
 type quarkResp struct {
 	Status  int    `json:"status"`
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Data    struct {
-		Title string `json:"title"`
+		Title       string `json:"title"`
+		Stoken      string `json:"stoken"`
+		Subscribed  bool   `json:"subscribed"`
+		ShareType   int    `json:"share_type"`
+		URLType     int    `json:"url_type"`
+		ExpiredType int    `json:"expired_type"`
+		ExpiredAt   int64  `json:"expired_at"`
 	} `json:"data"`
+}
+
+// quarkDetailResp 夸克详情API响应结构（第二个API：获取文件列表）
+type quarkDetailResp struct {
+	Status  int    `json:"status"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    struct {
+		IsOwner int           `json:"is_owner"`
+		List    []interface{} `json:"list"`
+	} `json:"data"`
+	Metadata map[string]interface{} `json:"metadata"`
 }
 
 // quarkRequest 获取夸克网盘分享信息
@@ -136,6 +189,55 @@ func quarkRequest(ctx context.Context, resourceID string, passCode string) (*qua
 	}
 
 	var response quarkResp
+	if err = json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("解析JSON失败: %v", err)
+	}
+
+	return &response, nil
+}
+
+// quarkDetailRequest 获取夸克网盘分享详情（文件列表）
+func quarkDetailRequest(ctx context.Context, resourceID string, stoken string) (*quarkDetailResp, error) {
+	// 构建URL，使用url.Values确保正确的URL编码
+	baseURL := "https://drive-pc.quark.cn/1/clouddrive/share/sharepage/detail"
+	params := url.Values{}
+	params.Set("pwd_id", resourceID)
+	params.Set("stoken", stoken)
+	apiURL := baseURL + "?" + params.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %v", err)
+	}
+
+	apphttp.SetDefaultHeaders(req)
+	req.Header.Set("accept", "application/json, text/plain, */*")
+	req.Header.Set("accept-language", "zh-CN,zh;q=0.9")
+	req.Header.Set("cache-control", "no-cache")
+	req.Header.Set("origin", "https://pan.quark.cn")
+	req.Header.Set("referer", "https://pan.quark.cn/")
+	req.Header.Set("pragma", "no-cache")
+
+	httpClient := apphttp.GetClient()
+	resp, err := httpClient.Do(req.WithContext(ctx))
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return nil, &apphttp.TimeoutError{Message: "请求超时"}
+		}
+		return nil, fmt.Errorf("发送请求失败: %v", err)
+	}
+	defer apphttp.CloseResponse(resp)
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %v", err)
+	}
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("API返回错误状态码: %d, 响应: %s", resp.StatusCode, string(body))
+	}
+
+	var response quarkDetailResp
 	if err = json.Unmarshal(body, &response); err != nil {
 		return nil, fmt.Errorf("解析JSON失败: %v", err)
 	}

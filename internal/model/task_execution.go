@@ -14,7 +14,7 @@ type TaskExecution struct {
 	ErrorMessage      string      `gorm:"type:text" json:"error_message"`                        // 错误信息
 	ExecutionDuration *int64      `gorm:"type:bigint" json:"execution_duration"`                  // 执行耗时（毫秒）
 	StartedAt         time.Time   `gorm:"not null" json:"started_at"`                              // 开始时间
-	FinishedAt        *time.Time  `gorm:"type:datetime" json:"finished_at"`                       // 结束时间
+	FinishedAt        *time.Time  `json:"finished_at"`                                            // 结束时间
 	CreatedAt         time.Time   `json:"created_at"`
 }
 

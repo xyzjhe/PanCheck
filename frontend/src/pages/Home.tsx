@@ -28,7 +28,7 @@ export function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="flex-1 bg-background">
       <div className="container mx-auto py-8 space-y-8">
         <div className="text-center space-y-2">
           <h1 className="text-4xl font-bold">网盘链接检查工具</h1>
